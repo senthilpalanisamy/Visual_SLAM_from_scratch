@@ -1,7 +1,22 @@
-#include<opencv2/opencv.hpp>
+#include <opencv2/opencv.hpp>
+#include <Eigen/Core>
+#include <sophus/se3.hpp>
 #include "feature_matching.hpp"
+#include <g2o/core/base_vertex.h>
+#include <g2o/core/base_unary_edge.h>
+#include <g2o/core/sparse_optimizer.h>
+#include <g2o/core/block_solver.h>
+#include <g2o/core/solver.h>
+#include <g2o/core/block_solver.h>
+#include <g2o/core/solver.h>
+#include <g2o/core/optimization_algorithm_gauss_newton.h>
+#include <g2o/solvers/dense/linear_solver_dense.h>
 
 using namespace std;
+
+typedef vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> Vectors3d;
+typedef vector<Eigen::Vector2d, Eigen::aligned_allocator<Eigen::Vector2d>> Vectors2d;
+typedef Eigen::Matrix<double, 6, 1> Vector6d;
 
 
 
@@ -58,6 +73,222 @@ void triangulate(const vector<cv::KeyPoint>& kp1, const vector<cv::KeyPoint>& kp
 }
 
 
+void solvePnPManual(const Vectors3d& points_3d, const Vectors2d& points_2d,
+                    const cv::Mat& K, Sophus::SE3d &pose)
+{
+  int maxIterations = 10;
+
+  double fx = K.at<double>(0, 0);
+  double fy = K.at<double>(1, 1);
+  double cx = K.at<double>(0, 2);
+  double cy = K.at<double>(1, 2);
+
+  double cost=0, lastCost=0;
+
+  
+
+
+  for(int i=0; i < maxIterations; ++i)
+  {
+
+    Eigen::Matrix<double, 6, 6> H = Eigen::Matrix<double, 6, 6>::Zero();
+    Vector6d rhs = Vector6d::Zero();
+    Vector6d dx = Vector6d::Zero();
+    cost = 0;
+
+    for (int j=0; j < points_3d.size(); ++j)
+    {
+
+      Eigen::Matrix<double, 2, 6> J = Eigen::Matrix<double, 2, 6>::Zero();
+      Eigen::Vector3d point = pose * points_3d[j];
+      Eigen::Vector2d error = Eigen::Vector2d::Zero();
+      double u = fx * point[0] / point[2] + cx;
+      double v = fy * point[1] / point[2] + cy;
+      error[0] = points_2d[j][0] - u;
+      error[1] = points_2d[j][1] - v;
+      cost += error[0] * error[0] + error[1] * error[1];
+
+      double zSquared = point[2] * point[2];
+      double invZ = 1.0 / point[2];
+      double invZSquare = invZ * invZ;
+      J(0, 0) += -fx * invZ;
+      J(0, 2) += fx * point[0] * invZSquare;
+      J(0, 3) += fx * point[0] * point[1] * invZSquare;
+      J(0, 4) += -fx - fx * point[0] * point[0] * invZSquare;
+      J(0, 5) += fx * point[1] * invZ;
+      J(1, 1) += -fy * invZ;
+      J(1, 2) += fy * point[1] * invZSquare;
+      J(1, 3) += fy + fy * point[1] * point[1] * invZSquare;
+      J(1, 4) += -fy * point[0] * point[1] * invZSquare;
+      J(1, 5) += -fy * point[0] * invZ;
+
+      rhs += -J.transpose() * error;
+      H += J.transpose() * J;
+    }
+
+    dx = H.ldlt().solve(rhs);
+    if(isnan(dx[0]))
+    {
+      cout<<"result is nan"<<endl;
+      break;
+    }
+
+
+    if(i > 0 && cost >= lastCost)
+    {
+      cout<<"cost increasing "<<cost<<endl;
+      break;
+    }
+
+    pose = Sophus::SE3d::exp(dx) * pose;
+    lastCost = cost;
+    cout<<"iteration: "<<i<<" cost="<<cost<<endl;
+    if(dx.norm() < 1e-6)
+    {
+      break;
+    }
+
+
+  }
+
+  cout<<"converged pose: "<<pose.matrix()<<endl;
+
+}
+
+
+// Start of g2o related stufss
+//
+class VertexPose: public g2o::BaseVertex<6, Sophus::SE3d>
+{
+  public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+
+    virtual void setToOriginImpl() override{
+      _estimate = Sophus::SE3d();
+    }
+
+    virtual void oplusImpl(const double* update) override{
+       Vector6d updateEigen;
+       updateEigen<< update[0], update[1], update[2], update[3], update[4], update[5];
+       _estimate = Sophus::SE3d::exp(updateEigen) * _estimate;
+    }
+
+    virtual bool read(istream &in) override {}
+    virtual bool write(ostream &out) const override {}
+};
+
+class EdgeProjection: public g2o::BaseUnaryEdge<2, Eigen::Vector2d, VertexPose>
+{
+  public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+
+    EdgeProjection(const Eigen::Vector3d &pos, const Eigen::Matrix3d &K): _pos3d(pos), _K(K){}
+
+    virtual void computeError() override{
+      const VertexPose *v = static_cast<VertexPose *>(_vertices[0]);
+      Sophus::SE3d T = v->estimate();
+      Eigen::Vector3d pos_pixel = _K * (T * _pos3d);
+      pos_pixel /= pos_pixel[2];
+      _error = _measurement - pos_pixel.head<2>();
+    }
+
+    virtual void linearizeOplus() override
+    {
+      const VertexPose *v = static_cast<VertexPose *> (_vertices[0]);
+
+      Sophus::SE3d T = v->estimate();
+      Eigen::Vector3d posCam = T * _pos3d;
+
+      double fx =  _K(0, 0);
+      double fy =  _K(1, 1);
+      double px = _K(0, 2);
+      double py = _K(1, 2);
+      double X = posCam[0];
+      double Y = posCam[1];
+      double Z = posCam[2];
+      double ZInv = 1.0 / Z;
+      double Z2Inv = ZInv * ZInv;
+      double Z2 = Z * Z;
+
+      _jacobianOplusXi
+        <<-fx *  ZInv, 0.0, fx * X * Z2, fx * X * Y * Z2Inv, - fx - fx * X * X * Z2Inv, -fx * Y * ZInv,
+          0.0, -fy * ZInv, fy * Y * Z2Inv, fy + fy * Y*Y * Z2Inv, -fy * X * Y * Z2Inv, -fy * X * ZInv;
+    }
+
+    virtual bool read(istream &in) override {}
+    virtual bool write(ostream &out) const override {}
+
+
+    Eigen::Vector3d _pos3d;
+    Eigen::Matrix3d _K;
+
+};
+
+
+void solvePnPusingG2O(
+    const Vectors3d &points3D,
+    const Vectors2d &points2D,
+    const cv::Mat &K,
+    Sophus::SE3d &pose
+    )
+{
+  typedef g2o::BlockSolver<g2o::BlockSolverTraits<6, 3>> BlockSolverType;
+  typedef g2o::LinearSolverDense<BlockSolverType::PoseMatrixType> LinearSolverType;
+
+  auto solver = new g2o::OptimizationAlgorithmGaussNewton(
+      g2o::make_unique<BlockSolverType>(g2o::make_unique<LinearSolverType>())
+      );
+
+  g2o::SparseOptimizer optimizer;
+  optimizer.setAlgorithm(solver);
+  optimizer.setVerbose(true);
+
+
+  int index=0;
+  VertexPose *vertexPose = new VertexPose();
+  vertexPose->setId(index);
+  vertexPose->setEstimate(Sophus::SE3d());
+  optimizer.addVertex(vertexPose);
+  ++index;
+
+
+  Eigen::Matrix3d KEigen;
+  KEigen<< 
+    K.at<double>(0, 0), K.at<double>(0, 1), K.at<double>(0, 2),
+    K.at<double>(1, 0), K.at<double>(1, 1), K.at<double>(1, 2),
+    K.at<double>(2, 0), K.at<double>(2, 1), K.at<double>(2, 2);
+
+
+  for(size_t i=0; i < points3D.size(); ++i)
+  {
+    auto p3d = points3D[i];
+    auto p2d = points2D[i];
+
+    EdgeProjection *edge = new EdgeProjection(p3d, KEigen);
+    edge->setId(0);
+    edge->setVertex(0, vertexPose);
+    edge->setMeasurement(p2d);
+    edge->setInformation(Eigen::Matrix2d::Identity());
+    optimizer.addEdge(edge);
+    index++;
+  }
+
+
+  chrono::steady_clock::time_point t1 = chrono::steady_clock::now();
+  optimizer.setVerbose(true);
+  optimizer.initializeOptimization();
+  optimizer.optimize(10);
+  chrono::steady_clock::time_point t2 = chrono::steady_clock::now();
+  chrono::duration<double> time = chrono::duration_cast<chrono::duration<double>>(t2 - t1);
+
+  cout<<"time used by g2o: "<<time.count()<<" seconds"<<endl;
+  cout<<"final pose "<<vertexPose->estimate().matrix()<<endl;
+  pose = vertexPose->estimate();
+}
+
+
+
+
 int main()
 {
   const cv::Mat img1 = cv::imread("1.png", 0);
@@ -88,7 +319,7 @@ int main()
   cv::Mat r,t;
 
   chrono::steady_clock::time_point t1 = chrono::steady_clock::now();
-  cv::solvePnP(points_3d, points_2d, K, cv::Mat(), r, t, false);
+  cv::solvePnP(points_3d, points_2d, K, cv::Mat(), r, t, false, cv::SOLVEPNP_ITERATIVE);
   cv::Mat R;
   cv::Rodrigues(r, R);
   chrono::steady_clock::time_point t2 = chrono::steady_clock::now();
@@ -96,6 +327,26 @@ int main()
   cout<<" time for solve pnp: "<<time_used.count()<<" seconds"<<endl;
   cout<<"R = "<<endl<<R<<endl;
   cout<<"t="<<endl<<t<<endl;
+
+
+  Vectors3d eigen_vectors_3d;
+  Vectors2d eigen_vectors_2d;
+  for(int i=0; i < points_3d.size(); ++i)
+  {
+    eigen_vectors_3d.push_back(Eigen::Vector3d(points_3d[i].x, points_3d[i].y, points_3d[i].z));
+    eigen_vectors_2d.push_back(Eigen::Vector2d(points_2d[i].x, points_2d[i].y));
+  }
+
+  Sophus::SE3d pose;
+
+  chrono::steady_clock::time_point t3 = chrono::steady_clock::now();
+  solvePnPManual(eigen_vectors_3d, eigen_vectors_2d, K, pose);
+  chrono::steady_clock::time_point t4 = chrono::steady_clock::now();
+  chrono::duration<double> time_used2 = chrono::duration_cast<chrono::duration<double>>(t4 - t3);
+  cout<<"time used manual pnp: "<<time_used2.count()<<" seconds"<<endl;
+
+  Sophus::SE3d newPose;
+  solvePnPusingG2O(eigen_vectors_3d, eigen_vectors_2d, K, newPose);
 
   return 0;
 }
