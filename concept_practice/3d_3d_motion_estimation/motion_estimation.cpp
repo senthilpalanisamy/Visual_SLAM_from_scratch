@@ -313,10 +313,10 @@ void solveICPusingSVD(
   {
     points1_3D[i] -= px;
     points2_3D[i] -= qx;
-    W += qx * px.transpose();
+    W += points1_3D[i] * points2_3D[i].transpose();
   }
 
-  Eigen::JacobiSVD<Eigen::MatrixXd> svd(W, Eigen::ComputeThinU | Eigen::ComputeThinV);
+  Eigen::JacobiSVD<Eigen::MatrixXd> svd(W, Eigen::ComputeFullU | Eigen::ComputeFullV);
   R = svd.matrixU() * svd.matrixV().transpose();
   if(R.determinant() < 0)
   {
@@ -346,7 +346,8 @@ int main()
   for(const auto& match: matches)
   {
     ushort depth = depth1.at<unsigned short>(int(kp1[match.queryIdx].pt.y), int(kp1[match.queryIdx].pt.x));
-    if(depth == 0)
+    ushort depth2 = depth1.at<unsigned short>(int(kp2[match.trainIdx].pt.y), int(kp2[match.trainIdx].pt.x));
+    if(depth == 0 || depth2 == 0)
       continue;
     double scaledDepth = depth / 5000.0;
 
@@ -356,9 +357,10 @@ int main()
                                    scaledDepth));
    points_2d.emplace_back(kp2[match.trainIdx].pt.x, kp2[match.trainIdx].pt.y);
    cv::Point2d normalisedPoint2 = pixel2Cam(kp2[match.trainIdx].pt, K);
-   points2_3d.push_back(cv::Point3d(normalisedPoint2.x * scaledDepth,
-                                    normalisedPoint2.y * scaledDepth,
-                                    scaledDepth));
+   double scaledDepth2 = depth2 / 5000.0;
+   points2_3d.push_back(cv::Point3d(normalisedPoint2.x * scaledDepth2,
+                                    normalisedPoint2.y * scaledDepth2,
+                                    scaledDepth2));
   }
 
   cv::Mat r,t;
@@ -403,6 +405,19 @@ int main()
   cout<<"time used for ICP: "<<time_used3.count()<<" seconds"<<endl;
   cout<<R1<<endl;
   cout<<tEigen.transpose()<<endl;
+  
+  cout<<"Alternate soltion"<<endl;
+  cout<<R1.transpose()<<endl;
+  cout<<(-R1.transpose()*tEigen).transpose()<<endl;
+
+  //for(int i=0; i < point)
+  for(int i=0; i < eigen_vectors_3d_pts1.size(); ++i)
+  {
+    cout<<"point 2"<<endl;
+    cout<<eigen_vectors_3d_pts2[i].transpose()<<endl;
+    cout<<"point Rp1+t"<<endl;
+    cout<< (R1 * eigen_vectors_3d_pts1[i] + tEigen).transpose()<<endl;
+  }
 
   return 0;
 }
