@@ -7,8 +7,6 @@
 #include <g2o/core/sparse_optimizer.h>
 #include <g2o/core/block_solver.h>
 #include <g2o/core/solver.h>
-#include <g2o/core/block_solver.h>
-#include <g2o/core/solver.h>
 #include <g2o/core/optimization_algorithm_gauss_newton.h>
 #include <g2o/solvers/dense/linear_solver_dense.h>
 
@@ -324,6 +322,77 @@ void solveICPusingSVD(
   }
 
   t = px - R * qx;
+}
+
+class PoseVertex: public g2o::BaseVertex<6, Sophus::SE3d>
+{
+  public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+
+    virtual void setToOriginImpl() override
+    {
+      _estimate = Sophus::SE3d();
+    }
+
+    virtual void oplusImpl(const double *update)
+    {
+      Eigen::Matrix<double, 6, 1> updateEigen;
+      updateEigen<< update[0], update[1], update[2], update[3], update[4], update[5];
+      _estimate = Sophus::SE3d::exp(updateEigen) * _estimate;
+    }
+
+    virtual bool read(istream &in) override {}
+    virtual bool write(ostream &out) const override {}
+};
+
+
+class EdgeProjectRGBDPose: public g2o::BaseUnaryEdge<3, Eigen::Vector3d, VertexPose>{
+  public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+
+    EdgeProjectRGBDPose(const Eigen::Vector3d &point):_point(point) {}
+
+    virtual void computeError() override{
+      const Vertex *pose = static_cast<const VertexPose *> (_vertices[0]);
+      _error = _measurement - pose->estimate() *_point;
+    }
+
+    virtual void linearizeOplus() override {
+      VertexPose *pose = static_cast<VertexPose *>(_vertices[0]);
+      Sophus::SE3d T = pose->estimate();
+      Eigen::Vector3d xyzTrans = T * _point;
+      _jacobianOplusXi.block<3, 3>(0, 0) = -Eigen::Matrix3d::Identity();
+      _jacobianOplusXi.block<3, 3>(0, 3) = Sophus::SO3d::hat(xyzTrans);
+    }
+
+    bool read(istream &in) {}
+    bool write(ostream &out) const {}
+    
+  protected:
+    Eigen::Vector3d _point;
+};
+
+
+
+
+
+void solveICPNonLinear(
+    Vectors3d &points1_3D,
+    Vectors3d &points2_3D,
+    Eigen::Matrix<double, 3, 3>& R,
+    Eigen::Vector3d &t
+    )
+{
+  typedef g2o::BlockSolverX BlockSolverType;
+  typedef g2o::LinearSolverDense<BlockSolverType::PoseMatrixType> LinearSolverType;
+
+  auto solver = new g2o::OptimizationAlgorithmGaussNewton(
+      g2o::make_unique<BlockSolverType>(g2o::make_unique<LinearSolverType>()));
+
+  g2o::SparseOptimizer optimizer;
+  optimizer.setAlgorithm(solver);
+  optimizer.setVerbose(true);
+
 }
 
 
