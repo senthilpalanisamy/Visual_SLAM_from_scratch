@@ -8,6 +8,7 @@
 #include <g2o/core/block_solver.h>
 #include <g2o/core/solver.h>
 #include <g2o/core/optimization_algorithm_gauss_newton.h>
+#include<g2o/core/optimization_algorithm_levenberg.h>
 #include <g2o/solvers/dense/linear_solver_dense.h>
 
 using namespace std;
@@ -346,14 +347,14 @@ class PoseVertex: public g2o::BaseVertex<6, Sophus::SE3d>
 };
 
 
-class EdgeProjectRGBDPose: public g2o::BaseUnaryEdge<3, Eigen::Vector3d, VertexPose>{
+class EdgeProjectRGBDPose: public g2o::BaseUnaryEdge<3, Eigen::Vector3d, PoseVertex>{
   public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
 
     EdgeProjectRGBDPose(const Eigen::Vector3d &point):_point(point) {}
 
     virtual void computeError() override{
-      const Vertex *pose = static_cast<const VertexPose *> (_vertices[0]);
+      const PoseVertex *pose = static_cast<const PoseVertex *> (_vertices[0]);
       _error = _measurement - pose->estimate() *_point;
     }
 
@@ -386,12 +387,34 @@ void solveICPNonLinear(
   typedef g2o::BlockSolverX BlockSolverType;
   typedef g2o::LinearSolverDense<BlockSolverType::PoseMatrixType> LinearSolverType;
 
-  auto solver = new g2o::OptimizationAlgorithmGaussNewton(
+  auto solver = new g2o::OptimizationAlgorithmLevenberg(
       g2o::make_unique<BlockSolverType>(g2o::make_unique<LinearSolverType>()));
 
   g2o::SparseOptimizer optimizer;
   optimizer.setAlgorithm(solver);
   optimizer.setVerbose(true);
+  PoseVertex *pose = new PoseVertex();
+  pose->setId(0);
+  pose->setEstimate(Sophus::SE3d());
+  optimizer.addVertex(pose);
+
+  for(size_t i=0; i < points1_3D.size(); ++i)
+  {
+    EdgeProjectRGBDPose *edge = new EdgeProjectRGBDPose(points2_3D[i]);
+    edge->setVertex(0, pose);
+    edge->setMeasurement(points1_3D[i]);
+    edge->setInformation(Eigen::Matrix3d::Identity());
+    optimizer.addEdge(edge);
+  }
+
+  chrono::steady_clock::time_point t1 = chrono::steady_clock::now();
+  optimizer.initializeOptimization();
+  optimizer.optimize(10);
+  chrono::steady_clock::time_point t2 = chrono::steady_clock::now();
+  chrono::duration<double> time_used = chrono::duration_cast<chrono::duration<double>>(t2  - t1);
+  cout<<"optimization cost time:"<<time_used.count()<<"seconds"<<endl;
+  R = pose->estimate().rotationMatrix();
+  t = pose->estimate().translation();
 
 }
 
@@ -402,8 +425,8 @@ int main()
 {
   const cv::Mat img1 = cv::imread("1.png", 0);
   const cv::Mat img2 = cv::imread("2.png", 0);
-  const cv::Mat depth1 = cv::imread("1_depth.png", cv::IMREAD_UNCHANGED);
-  const cv::Mat depth2 = cv::imread("2_depth.png", cv::IMREAD_UNCHANGED);
+  const cv::Mat depthImg1 = cv::imread("1_depth.png", cv::IMREAD_UNCHANGED);
+  const cv::Mat depthImg2 = cv::imread("2_depth.png", cv::IMREAD_UNCHANGED);
   cv::Mat K = (cv::Mat_<double>(3, 3) << 520.9, 0, 325.1, 0, 521.0, 249.7, 0, 0, 1);
   vector<cv::DMatch> matches;
   vector<cv::KeyPoint> kp1, kp2;
@@ -414,8 +437,8 @@ int main()
 
   for(const auto& match: matches)
   {
-    ushort depth = depth1.at<unsigned short>(int(kp1[match.queryIdx].pt.y), int(kp1[match.queryIdx].pt.x));
-    ushort depth2 = depth1.at<unsigned short>(int(kp2[match.trainIdx].pt.y), int(kp2[match.trainIdx].pt.x));
+    ushort depth = depthImg1.at<unsigned short>(int(kp1[match.queryIdx].pt.y), int(kp1[match.queryIdx].pt.x));
+    ushort depth2 = depthImg2.at<unsigned short>(int(kp2[match.trainIdx].pt.y), int(kp2[match.trainIdx].pt.x));
     if(depth == 0 || depth2 == 0)
       continue;
     double scaledDepth = depth / 5000.0;
@@ -468,6 +491,9 @@ int main()
   Eigen::Matrix<double, 3, 3> R1;
   Eigen::Vector3d tEigen;
   chrono::steady_clock::time_point t5 = chrono::steady_clock::now();
+  auto eigen_vectors_3d_pts1_copy = eigen_vectors_3d_pts1;
+  auto eigen_vectors_3d_pts2_copy = eigen_vectors_3d_pts2;
+
   solveICPusingSVD(eigen_vectors_3d_pts1, eigen_vectors_3d_pts2, R1, tEigen);
   chrono::steady_clock::time_point t6 = chrono::steady_clock::now();
   chrono::duration<double> time_used3 = chrono::duration_cast<chrono::duration<double>>(t6 - t5);
@@ -483,9 +509,24 @@ int main()
   for(int i=0; i < eigen_vectors_3d_pts1.size(); ++i)
   {
     cout<<"point 2"<<endl;
-    cout<<eigen_vectors_3d_pts2[i].transpose()<<endl;
+    cout<<eigen_vectors_3d_pts2_copy[i].transpose()<<endl;
     cout<<"point Rp1+t"<<endl;
-    cout<< (R1 * eigen_vectors_3d_pts1[i] + tEigen).transpose()<<endl;
+    cout<< (R1 * eigen_vectors_3d_pts1_copy[i] + tEigen).transpose()<<endl;
+  }
+
+  Eigen::Matrix<double, 3, 3> R2;
+  Eigen::Vector3d t2Eigen;
+
+  cout<<"# non-linear ICP"<<endl;
+
+  solveICPNonLinear(eigen_vectors_3d_pts1_copy, eigen_vectors_3d_pts2_copy, R2, t2Eigen);
+
+  for(int i=0; i < eigen_vectors_3d_pts1_copy.size(); ++i)
+  {
+    cout<<"point 2"<<endl;
+    cout<<eigen_vectors_3d_pts2_copy[i].transpose()<<endl;
+    cout<<"point Rp1+t"<<endl;
+    cout<< (R2 * eigen_vectors_3d_pts1_copy[i] + t2Eigen).transpose()<<endl;
   }
 
   return 0;
