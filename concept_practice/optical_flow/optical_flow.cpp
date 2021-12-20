@@ -46,7 +46,7 @@ class OpticalFlowTracker
 //       + xx * yy * img.at<uchar>(y_a1, x_a1);                                                                                                                                                               
 //   }            
 
-int getPixelValue2(const Mat& img, float y, float x)
+int getPixelValue(const Mat& img, float y, float x)
 {
   if(x < 0)
   {
@@ -274,8 +274,8 @@ int main()
 {
   string image1Path = "./LK1.png";
   string image2Path = "./LK2.png";
-  Mat image1 = imread(image1Path);
-  Mat image2 = imread(image2Path);
+  Mat image1 = imread(image1Path, 0);
+  Mat image2 = imread(image2Path, 0);
 
   vector<KeyPoint> kp1;
   Ptr<GFTTDetector> detector = GFTTDetector::create(500, 0.01, 20);
@@ -284,12 +284,12 @@ int main()
   vector<KeyPoint> kp2;
   vector<bool> success;
   //calculateSingleLayerOpticalFlow(image1, image2, kp1, kp2, success);
-  calculateSingleLayerOpticalFlow(image1, image2, kp1, kp2, success);
-  //calculateMultiLayerOpticalFlow(image1, image2, kp1, kp2, success);
+  //calculateSingleLayerOpticalFlow(image1, image2, kp1, kp2, success);
+  calculateMultiLayerOpticalFlow(image1, image2, kp1, kp2, success);
 
 
   vector<cv::DMatch> matches;
-  for(int i=0; i < 10; ++i)
+  for(int i=0; i < kp1.size(); ++i)
   {
     if(success[i])
     {
