@@ -25,7 +25,7 @@ class JacobiAccumulator
   VecVector2d projectedPixels;
   const VecVector3d &sampledPixel3DPositions;
   mutex hessianMutex;
-  Sophus::SE3d T_rt;
+  Sophus::SE3d &T_rt;
   Matrix6d H;
   Matrix26d J;
   Vector6d b;
@@ -35,12 +35,13 @@ class JacobiAccumulator
   public:
     JacobiAccumulator(const Mat &referenceImage_, const Mat &testImage_,
                      const VecVector2d &sampledPixels_, const VecVector3d &sampledPixel3DPositions_,
-                     Sophus::SE3d T_rt_):referenceImage(referenceImage_), testImage(testImage_),
+                     Sophus::SE3d& T_rt_):referenceImage(referenceImage_), testImage(testImage_),
                                          sampledPixels(sampledPixels_), sampledPixel3DPositions(sampledPixel3DPositions_),
                                          T_rt(T_rt_){
                                            goodCount = 0;
                                           // projectedPixels = vector<Eigen::Vector2d>(sampledPixels.size(), Eigen::Vector2d(-1, -1));
                                           projectedPixels = VecVector2d(sampledPixels.size(), Eigen::Vector2d(-1, -1));
+                                          intensityCost = 0;
                                          }
     void accumulateJacobian(const Range &range);
     Matrix6d get_H()
@@ -147,7 +148,7 @@ void JacobiAccumulator::accumulateJacobian(const Range& range)
 
     Eigen::Vector3d P = T_rt * referencePixel3DPosition;
     double X = P[0], Y = P[1], Z=P[2];
-    double ZInv = 1 / Z, Z2Inv = ZInv * ZInv;
+    double ZInv = 1.0 / Z, Z2Inv = ZInv * ZInv;
 
     double u = fx * P[0] / P[2] + cx;
     double v = fy * P[1] / P[2] + cy;
@@ -177,7 +178,7 @@ void JacobiAccumulator::accumulateJacobian(const Range& range)
     {
       for(int y=-halfPatchSize; y <= halfPatchSize; ++y)
       {
-        double intensityDifference = getPixelValue(referenceImage, y, x) - getPixelValue(testImage, y, x);
+        double intensityDifference = getPixelValue(referenceImage, referencePixel[1] + y, referencePixel[0] +x) - getPixelValue(testImage, v + y, u + x);
         intensityCost_ += intensityDifference * intensityDifference;
 
         Eigen::Vector2d J_i = Eigen::Vector2d::Zero();
@@ -195,7 +196,7 @@ void JacobiAccumulator::accumulateJacobian(const Range& range)
   {
 
     unique_lock<mutex> lock(hessianMutex);
-    goodCount = goodCount_;
+    goodCount += goodCount_;
     if(goodCount_)
     {
     H += H_;
@@ -212,7 +213,7 @@ void JacobiAccumulator::accumulateJacobian(const Range& range)
 }
 
 
-void directPoseEstimationSingleLayer(const Mat& referenceImage, Mat& testImage,
+void directPoseEstimationSingleLayer(const Mat& referenceImage, const Mat& testImage,
                                      const VecVector2d &sampledPixels,
                                      const VecVector3d &sampledPixel3DPositions,
                                      Sophus::SE3d& T_rt)
@@ -225,15 +226,10 @@ void directPoseEstimationSingleLayer(const Mat& referenceImage, Mat& testImage,
 
   for(int iter=0; iter < iterCount; ++iter)
   {
-    // cv::parallel_for_(cv::Range(0, sampledPixels.size()),
-    //                 std::bind(&JacobiAccumulator::accumulateJacobian, &jacobi,
-    //                           std::placeholders::_1));
     jacobi.reset();
 
   parallel_for_(Range(0, sampledPixels.size()), std::bind(&JacobiAccumulator::accumulateJacobian,
                       &jacobi, placeholders::_1));
-   // cv::parallel_for_(cv::Range(0, px_ref.size()),                                                                                                                                                   
-   //                         std::bind(&JacobianAccumulator::accumulate_jacobian, &jaco_accu, std::placeholders::_1));
 
    Matrix6d H = jacobi.get_H();
    Vector6d b = jacobi.get_b();
@@ -274,22 +270,85 @@ void directPoseEstimationSingleLayer(const Mat& referenceImage, Mat& testImage,
   for(int i=0; i < sampledPixels.size(); ++i)
   {
     const auto& currentPoint = projections[i];
-    if(currentPoint[0] < -1 || currentPoint[1]< -1)
+    if(currentPoint[0] < 0 || currentPoint[1]< 0)
     {
       continue;
     }
     const auto& referencePoint = sampledPixels[i];
+    // cout<<currentPoint[0]<<" "<<currentPoint[1]<<" "<<referencePoint[0]<<" "<<referencePoint[1]<<endl;
     circle(showImage, Point2f(currentPoint[0],  currentPoint[1]), 2, Scalar(255, 0, 0), 2);
     line(showImage, Point2f(referencePoint[0], referencePoint[1]), Point2f(currentPoint[0], currentPoint[1]),
                             Scalar(0, 255, 0));
   }
   imshow("current", showImage);
   waitKey(0);
-
-
-
-
 }
+
+void directPoseEstimationMultiLayer(const Mat& referenceImage, const Mat& testImage,
+                                    const VecVector2d &sampledPixels,
+                                    const VecVector3d &sampledPixel3DPositions,
+                                    const Mat& disparity,
+                                    Sophus::SE3d& T_rt)
+{
+  int pyramidLevels = 4;
+  vector<double> pyramidScales = {0.125, 0.25, 0.5, 1.0};
+  double scaleFactor = 0.5;
+
+  vector<Mat> pyramidsRefImage, pyramidsTestImage;
+
+  for(int i=0; i < pyramidLevels; ++i)
+  {
+    if(i == 0)
+    {
+      pyramidsRefImage.emplace_back(referenceImage);
+      pyramidsTestImage.emplace_back(testImage);
+    }
+    else
+    {
+      Mat resizedRefImage, resizedTestImage;
+      const Mat &refImage = pyramidsRefImage[pyramidsRefImage.size()-1];
+      const Mat &testImage = pyramidsRefImage[pyramidsTestImage.size()-1];
+      resize(refImage, resizedRefImage, Size(refImage.cols * scaleFactor, refImage.rows * scaleFactor));
+      resize(testImage, resizedTestImage, Size(testImage.cols * scaleFactor, testImage.rows * scaleFactor));
+      pyramidsRefImage.emplace_back(resizedRefImage);
+      pyramidsTestImage.emplace_back(resizedTestImage);
+    }
+  }
+
+  double fxG = fx , fyG = fy, cxG = cx, cyG = cy;
+
+  for(int i=0; i < pyramidScales.size(); ++i)
+  {
+    double fx = fxG * pyramidScales[i], fy = pyramidScales[i] * fyG,
+           cx = cxG * pyramidScales[i], cy = cyG * pyramidScales[i];
+    VecVector2d rescaledPixels;
+    VecVector3d newDepthPoints;
+
+    for(auto pixel:sampledPixels)
+    {
+      rescaledPixels.emplace_back(pixel[0] * pyramidScales[i], pixel[1] * pyramidScales[i]);
+
+      double thisDisparity = disparity.at<uchar>(pixel[1], pixel[0]);
+
+      double depth = (fx * baseline)  / thisDisparity;
+      double X = depth * (rescaledPixels[rescaledPixels.size()-1][0] - cx) / fx;
+      double Y = depth * (rescaledPixels[rescaledPixels.size()-1][1] - cy) / fy;
+
+
+      // sampledPixel3DPositions.emplace_back(X, Y, depth);
+      newDepthPoints.emplace_back(X, Y, depth);
+    }
+
+
+    // directPoseEstimationSingleLayer(pyramidsRefImage[pyramidLevels-1-i], pyramidsTestImage[pyramidLevels-1-i], rescaledPixels,
+    //                                 sampledPixel3DPositions, T_rt);
+    cout<<fx<<" "<<fy<<" "<<cx<<" "<<cy<<endl;
+
+    directPoseEstimationSingleLayer(pyramidsRefImage[pyramidLevels-1-i], pyramidsTestImage[pyramidLevels-1-i], rescaledPixels,
+                                    newDepthPoints, T_rt);
+  }
+}
+
 
 
 int main()
@@ -331,6 +390,7 @@ int main()
     string fileName = (imageSequenceFormat % i).str();
     Mat testImage = imread((imageSequenceFormat % i).str(), 0);
     directPoseEstimationSingleLayer(referenceImage, testImage, sampledPixels, sampledPixel3DPositions, T_rt);
+    //directPoseEstimationMultiLayer(referenceImage, testImage, sampledPixels, sampledPixel3DPositions, disparity, T_rt);
 
   }
 
