@@ -2,6 +2,7 @@
 #include <sophus/se3.hpp>
 #include <boost/format.hpp>
 #include <mutex>
+#include <limits>
 
 #define PRINT_DEBUG 1
 
@@ -73,7 +74,7 @@ class JacobiAccumulator
       }
       else
       {
-        return 0;
+        return numeric_limits<double>::max();
       }
 
     }
@@ -216,7 +217,7 @@ void JacobiAccumulator::accumulateJacobian(const Range& range)
 void directPoseEstimationSingleLayer(const Mat& referenceImage, const Mat& testImage,
                                      const VecVector2d &sampledPixels,
                                      const VecVector3d &sampledPixel3DPositions,
-                                     Sophus::SE3d& T_rt)
+                                     Sophus::SE3d& T_rt, bool showDebug=true)
   // Trt - transformation that transform point in reference image frame to test image frame
 {
    JacobiAccumulator jacobi(referenceImage, testImage, sampledPixels, sampledPixel3DPositions, T_rt);
@@ -236,17 +237,17 @@ void directPoseEstimationSingleLayer(const Mat& referenceImage, const Mat& testI
    double intensityCost = jacobi.getCost();
    Vector6d update = H.ldlt().solve(b);
 
-   cout<<"current cost: "<<intensityCost<<endl;
+   //cout<<"current cost: "<<intensityCost<<endl;
 
    if(std::isnan(update[0]))
    {
-     cout<<"Nan encountered in optimization"<<endl;
+     //cout<<"Nan encountered in optimization"<<endl;
      break;
    }
 
    if((iter > 0) && (lastCost < intensityCost))
    {
-     cout<<"cost increasing breaking"<<endl;
+     //cout<<"cost increasing breaking"<<endl;
      break;
    }
 
@@ -256,7 +257,7 @@ void directPoseEstimationSingleLayer(const Mat& referenceImage, const Mat& testI
 
    if(update.norm() < 1e-3)
    {
-     cout<<"update too small breaking- Algorithm converged"<<endl;
+     //cout<<"update too small breaking- Algorithm converged"<<endl;
      break;
    }
 
@@ -264,24 +265,28 @@ void directPoseEstimationSingleLayer(const Mat& referenceImage, const Mat& testI
   }
 
 
-  Mat showImage;
-  cvtColor(testImage, showImage, COLOR_GRAY2BGR);
-  const VecVector2d &projections = jacobi.getProjections();
-  for(int i=0; i < sampledPixels.size(); ++i)
+  if(showDebug)
   {
-    const auto& currentPoint = projections[i];
-    if(currentPoint[0] < 0 || currentPoint[1]< 0)
+
+    Mat showImage;
+    cvtColor(testImage, showImage, COLOR_GRAY2BGR);
+    const VecVector2d &projections = jacobi.getProjections();
+    for(int i=0; i < sampledPixels.size(); ++i)
     {
-      continue;
+      const auto& currentPoint = projections[i];
+      if(currentPoint[0] < 0 || currentPoint[1]< 0)
+      {
+        continue;
+      }
+      const auto& referencePoint = sampledPixels[i];
+      circle(showImage, Point2f(currentPoint[0],  currentPoint[1]), 2, Scalar(255, 0, 0), 2);
+      line(showImage, Point2f(referencePoint[0], referencePoint[1]), Point2f(currentPoint[0], currentPoint[1]),
+                              Scalar(0, 255, 0));
     }
-    const auto& referencePoint = sampledPixels[i];
-    // cout<<currentPoint[0]<<" "<<currentPoint[1]<<" "<<referencePoint[0]<<" "<<referencePoint[1]<<endl;
-    circle(showImage, Point2f(currentPoint[0],  currentPoint[1]), 2, Scalar(255, 0, 0), 2);
-    line(showImage, Point2f(referencePoint[0], referencePoint[1]), Point2f(currentPoint[0], currentPoint[1]),
-                            Scalar(0, 255, 0));
+    imshow("current", showImage);
+    waitKey(0);
+
   }
-  imshow("current", showImage);
-  waitKey(0);
 }
 
 void directPoseEstimationMultiLayer(const Mat& referenceImage, const Mat& testImage,
@@ -293,6 +298,7 @@ void directPoseEstimationMultiLayer(const Mat& referenceImage, const Mat& testIm
   int pyramidLevels = 4;
   vector<double> pyramidScales = {0.125, 0.25, 0.5, 1.0};
   double scaleFactor = 0.5;
+
 
   vector<Mat> pyramidsRefImage, pyramidsTestImage;
 
@@ -307,7 +313,7 @@ void directPoseEstimationMultiLayer(const Mat& referenceImage, const Mat& testIm
     {
       Mat resizedRefImage, resizedTestImage;
       const Mat &refImage = pyramidsRefImage[pyramidsRefImage.size()-1];
-      const Mat &testImage = pyramidsRefImage[pyramidsTestImage.size()-1];
+      const Mat &testImage = pyramidsTestImage[pyramidsTestImage.size()-1];
       resize(refImage, resizedRefImage, Size(refImage.cols * scaleFactor, refImage.rows * scaleFactor));
       resize(testImage, resizedTestImage, Size(testImage.cols * scaleFactor, testImage.rows * scaleFactor));
       pyramidsRefImage.emplace_back(resizedRefImage);
@@ -319,33 +325,26 @@ void directPoseEstimationMultiLayer(const Mat& referenceImage, const Mat& testIm
 
   for(int i=0; i < pyramidScales.size(); ++i)
   {
-    double fx = fxG * pyramidScales[i], fy = pyramidScales[i] * fyG,
-           cx = cxG * pyramidScales[i], cy = cyG * pyramidScales[i];
+    fx = fxG * pyramidScales[i];
+    fy = pyramidScales[i] * fyG;
+    cx = cxG * pyramidScales[i];
+    cy = cyG * pyramidScales[i];
+
     VecVector2d rescaledPixels;
     VecVector3d newDepthPoints;
 
-    for(auto pixel:sampledPixels)
+   for(auto pixel:sampledPixels)
     {
       rescaledPixels.emplace_back(pixel[0] * pyramidScales[i], pixel[1] * pyramidScales[i]);
 
-      double thisDisparity = disparity.at<uchar>(pixel[1], pixel[0]);
-
-      double depth = (fx * baseline)  / thisDisparity;
-      double X = depth * (rescaledPixels[rescaledPixels.size()-1][0] - cx) / fx;
-      double Y = depth * (rescaledPixels[rescaledPixels.size()-1][1] - cy) / fy;
-
-
-      // sampledPixel3DPositions.emplace_back(X, Y, depth);
-      newDepthPoints.emplace_back(X, Y, depth);
     }
 
-
-    // directPoseEstimationSingleLayer(pyramidsRefImage[pyramidLevels-1-i], pyramidsTestImage[pyramidLevels-1-i], rescaledPixels,
-    //                                 sampledPixel3DPositions, T_rt);
-    cout<<fx<<" "<<fy<<" "<<cx<<" "<<cy<<endl;
-
+    auto startTime = chrono::steady_clock::now();
     directPoseEstimationSingleLayer(pyramidsRefImage[pyramidLevels-1-i], pyramidsTestImage[pyramidLevels-1-i], rescaledPixels,
-                                    newDepthPoints, T_rt);
+                                    sampledPixel3DPositions, T_rt, true);
+    auto stopTime = chrono::steady_clock::now();
+    auto timeUsed = chrono::duration_cast<chrono::duration<double>>(stopTime - startTime);
+    cout<<"time for single layer: "<<timeUsed.count()<<endl;
   }
 }
 
@@ -389,13 +388,9 @@ int main()
   {
     string fileName = (imageSequenceFormat % i).str();
     Mat testImage = imread((imageSequenceFormat % i).str(), 0);
-    directPoseEstimationSingleLayer(referenceImage, testImage, sampledPixels, sampledPixel3DPositions, T_rt);
-    //directPoseEstimationMultiLayer(referenceImage, testImage, sampledPixels, sampledPixel3DPositions, disparity, T_rt);
-
+    //directPoseEstimationSingleLayer(referenceImage, testImage, sampledPixels, sampledPixel3DPositions, T_rt);
+    directPoseEstimationMultiLayer(referenceImage, testImage, sampledPixels, sampledPixel3DPositions, disparity, T_rt);
   }
-
-
-
 
   return 0;
 }
