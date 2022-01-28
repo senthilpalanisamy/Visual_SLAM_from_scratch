@@ -26,7 +26,7 @@ void solveBundleAdjustment(BALProblem &bal_problem)
   const int point_block_size = bal_problem.point_block_size();
   const int camera_block_size = bal_problem.camera_block_size();
   double *points = bal_problem.mutable_points();
-  double *cameras = bal_problem.mutable_points();
+  double *cameras = bal_problem.mutable_cameras();
 
   const double *observations = bal_problem.observations();
   ceres::Problem problem;
@@ -36,6 +36,7 @@ void solveBundleAdjustment(BALProblem &bal_problem)
     ceres::CostFunction *cost_function;
 
 
+    cout<<"complted observation: "<<i<<endl;
     cost_function = SnavelyReprojectionError::Create(observations[i*2],
                                                     observations[i*2+1]);
     ceres::LossFunction *loss_function = new ceres::HuberLoss(1.0);
