@@ -11,7 +11,8 @@ class FrontEnd
   TrackingState trackingState;
 
   int detectFeatures();
-  void stereoInit();
+  int findFeaturesInRight();
+  bool stereoInit();
   public:
   FrontEnd();
   void addFrame(shared_ptr<Frame>& frame);

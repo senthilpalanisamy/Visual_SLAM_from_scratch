@@ -28,13 +28,14 @@ class MapPoint
 
 class Feature
 {
-  cv::KeyPoint position;
   weak_ptr<Frame> frame;
   weak_ptr<MapPoint> mapPoint;
   public:
-  Feature(cv::KeyPoint position_):position(position_){};
-  Feature(cv::KeyPoint position_, shared_ptr<Frame> frame_): position(position_), frame(frame_){};
+  Feature(cv::KeyPoint kp_):kp(kp_){};
+  Feature(cv::KeyPoint kp_, shared_ptr<Frame> frame_): kp(kp_), frame(frame_){};
+  cv::KeyPoint kp;
   typedef shared_ptr<Feature> Ptr;
+  bool isOnLeftImage, isOnRightImage;
 };
 
 #endif
