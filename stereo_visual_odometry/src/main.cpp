@@ -6,6 +6,7 @@ int main()
   string kittiPath = "/home/senthil/work/slam-construction-from-scratch/data_odometry_gray/dataset/sequences/00";
   KittiDatasetAdapter kittiData(kittiPath);
   SVO svo(kittiData);
+  svo.init();
   svo.run();
   
 

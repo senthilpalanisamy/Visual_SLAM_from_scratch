@@ -15,10 +15,11 @@ class KittiDatasetAdapter
 {
   string dataPath;
   const string calibFile = "calib.txt";
-  vector<Camera::Ptr> cameras;
+  const double downsamplingFactor = 0.5;
   int imageIndex;
   boost::format imagePathFormat;
   public:
+  vector<Camera::Ptr> cameras;
   KittiDatasetAdapter(const string& dataPath_);
   Frame::Ptr nextFrame();
 };

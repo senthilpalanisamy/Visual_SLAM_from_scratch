@@ -5,6 +5,13 @@
 using std::cout;
 using std::endl;
 
+void SVO::init()
+{
+  frontend.setCameras(dataset.cameras[0], dataset.cameras[1]);
+
+
+}
+
 
 void SVO::run()
 {

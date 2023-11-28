@@ -1,13 +1,19 @@
 #ifndef FRAME_INCLUDE_HPP
 #define FRAME_INCLUDE_HPP
-#include <opencv2/opencv.hpp>
 #include <memory>
 #include <vector>
+
 class Feature;
-//#include <stereo_slam/slam_utilites.hpp>
+class Camera;
+
+#include <opencv2/opencv.hpp>
+
+//#include <stereo_slam/slam_utilities.hpp>
+
 
 using std::shared_ptr;
 using std::vector;
+
 
 class Frame
 {

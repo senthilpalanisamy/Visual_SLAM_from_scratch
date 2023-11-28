@@ -17,6 +17,7 @@ class SVO
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
   SVO(const KittiDatasetAdapter& dataset_):dataset(dataset_){};
   void run();
+  void init();
 
 };
 #endif

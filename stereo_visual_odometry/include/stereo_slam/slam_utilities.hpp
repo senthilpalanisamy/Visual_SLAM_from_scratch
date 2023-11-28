@@ -1,11 +1,13 @@
 #ifndef SLAM_UTILITIES_H
-#define SLAM_UTILITES_H
+#define SLAM_UTILITIES_H
 #include <memory>
 #include <vector>
 
 #include<opencv2/opencv.hpp>
 
+#include <stereo_slam/common_include.hpp>
 #include <stereo_slam/frame.hpp>
+
 using std::vector;
 using std::shared_ptr;
 using std::weak_ptr;
@@ -16,9 +18,12 @@ class Camera
   double fx, fy, cx, cy, baseline;
   public:
   typedef shared_ptr<Camera> Ptr;
-  vector<Ptr> cameras;
-  Camera(double fx_, double fy_, double cx_, double cy_);
-
+  SE3 pose;
+  // typdef shared_ptr<Camera> Ptr;
+  Camera(double fx_, double fy_, double cx_, double cy_, SE3 pose);
+  Mat33 K();
+  Vec2 cameraToPixels(const Vec3& point3d);
+  Vec3 pixelToCamera(const Vec2& pixel, double depth=1.0);
 };
 
 class MapPoint

@@ -6,16 +6,14 @@
 using std::string;
 using std::cout;
 
-Camera::Camera(double fx_, double fy_, double cx_, double cy_):fx(fx_), fy(fy_), cx(cx_), cy(cy_)
-{
-
-};
 
 KittiDatasetAdapter::KittiDatasetAdapter(const string& dataPath_):dataPath(dataPath_)
 {
   string calibPath = dataPath + "/" + calibFile;
   cout<<"path:"<<calibPath<<std::endl;
+  imagePathFormat = boost::format("%s/image_%d/%06d.png");
   std::ifstream fin(calibPath);
+  imageIndex=0;
   if(!fin)
   {
     throw std::invalid_argument("file path doesn't exist");
@@ -33,11 +31,16 @@ KittiDatasetAdapter::KittiDatasetAdapter(const string& dataPath_):dataPath(dataP
     {
       fin >>projectionMatrix[j];
     }
-  }
-  Camera::Ptr newCamera(new Camera(projectionMatrix[0], projectionMatrix[5], projectionMatrix[3], projectionMatrix[7]));
+    Mat33 K;
+    K << projectionMatrix[0], projectionMatrix[1], projectionMatrix[2], projectionMatrix[4], projectionMatrix[5], projectionMatrix[6], projectionMatrix[8], projectionMatrix[9], projectionMatrix[10];
+
+  Vec3 t;
+  t << projectionMatrix[3], projectionMatrix[7], projectionMatrix[11];
+  t = K.inverse() * t;
+  K = K * downsamplingFactor;
+  Camera::Ptr newCamera(new Camera(projectionMatrix[0], projectionMatrix[5], projectionMatrix[3], projectionMatrix[7], SE3(SO3(), t)));
   cameras.push_back(newCamera);
-  imageIndex=0;
-  imagePathFormat = boost::format("%s/image_%d/%06d.png");
+  }
 }
 
 Frame::Ptr KittiDatasetAdapter::nextFrame()
@@ -46,8 +49,22 @@ Frame::Ptr KittiDatasetAdapter::nextFrame()
   auto leftImagePath = (imagePathFormat % dataPath % 0 % imageIndex).str();
   auto rightImagePath = (imagePathFormat % dataPath % 1 % imageIndex).str();
   Frame::Ptr newFrame = Frame::createFrame();
-  newFrame->leftImage = cv::imread(leftImagePath, cv::IMREAD_GRAYSCALE);
-  newFrame->rightImage = cv::imread(rightImagePath, cv::IMREAD_GRAYSCALE);
+  cv::Mat leftImage, rightImage;
+  leftImage = cv::imread(leftImagePath, cv::IMREAD_GRAYSCALE);
+  rightImage = cv::imread(rightImagePath, cv::IMREAD_GRAYSCALE);
+  newFrame->rightImage = rightImage;
+  cv::Mat image_left_resized, image_right_resized;
+  cv::resize(leftImage, image_left_resized, cv::Size(), 0.5, 0.5,
+                 cv::INTER_NEAREST);
+  cv::resize(rightImage, image_right_resized, cv::Size(), 0.5, 0.5,
+                 cv::INTER_NEAREST);
+
+
+  newFrame->leftImage = image_left_resized;
+  newFrame->rightImage = image_right_resized;
+
+  cout<<"type: "<<newFrame->leftImage.type()<<std::endl;
+  cout<<"type: "<<newFrame->rightImage.type()<<std::endl;
   if((newFrame->leftImage.data == nullptr) || (newFrame->rightImage.data == nullptr))
   {
     return nullptr;
