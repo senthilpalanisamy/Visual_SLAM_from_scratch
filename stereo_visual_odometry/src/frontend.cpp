@@ -25,7 +25,7 @@ void FrontEnd::addFrame(shared_ptr<Frame>& currentFrame_)
   currentFrame = currentFrame_;
   if(trackingState == TrackingState::INITING)
   {
-    if(stereoInit());
+    if(stereoInit())
     {
       trackingState = TrackingState::TRACKING_GOOD;
     }
@@ -48,7 +48,7 @@ int FrontEnd::findFeaturesInRight()
   cv::Mat error;
   cv::imshow("leftImage", currentFrame->leftImage);
   cv::imshow("rightImage", currentFrame->rightImage);
-  cv::waitKey(0);
+  cv::waitKey(100);
 
   std::cout<<"type: "<<currentFrame->leftImage.type()<<std::endl;
   std::cout<<"type: "<<currentFrame->rightImage.type()<<std::endl;
@@ -99,7 +99,8 @@ int FrontEnd::findFeaturesInRight()
   cv::Mat output;
   cv::drawMatches(leftImageColor, leftKeyPoint, rightImageColor, rightKeyPoint, matches, output);
   cv::imshow("matches", output);
-  cv::waitKey(0);
+  cv::waitKey(100);
+  std::cout<<"exiting"<<std::endl;
   return goodFeaturesCount;
 
 }
@@ -122,6 +123,7 @@ bool FrontEnd::stereoInit()
 
   }
   bool isMapInit = mapInit();
+  return isMapInit;
 }
 
 bool FrontEnd::mapInit()
@@ -149,6 +151,6 @@ bool FrontEnd::mapInit()
   }
 
 
-  return true;
+  return false;
 
 }

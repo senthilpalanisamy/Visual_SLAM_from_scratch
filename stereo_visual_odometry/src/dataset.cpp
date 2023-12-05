@@ -71,7 +71,7 @@ Frame::Ptr KittiDatasetAdapter::nextFrame()
   }
   cv::imshow("leftImage", newFrame->leftImage);
   cv::imshow("rightImage", newFrame->rightImage);
-  cv::waitKey(0);
+  cv::waitKey(100);
 
   ++imageIndex;
   return newFrame;
